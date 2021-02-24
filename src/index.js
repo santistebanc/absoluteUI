@@ -1,8 +1,8 @@
-import { auto, Context, store } from "./src/direct";
-import Box from "./src/templates/Box";
-import Text from "./src/templates/Text";
-import View from "./src/View";
-import RenderToDOM from "./src/RenderToDOM";
+import { auto, Context, store } from "./direct";
+import Box from "./templates/Box";
+import Text from "./templates/Text";
+import View from "./View";
+import RenderToDOM from "./RenderToDOM";
 import opentype from "opentype.js";
 
 const { screenWidth, screenHeight, appFont, title, page, g } = store({
