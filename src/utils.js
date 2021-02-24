@@ -1,4 +1,4 @@
-import { memoized, state } from "./direct";
+import { prop, state } from "./direct";
 
 export function resolveProps(defaults) {
   return (props) => {
@@ -11,24 +11,28 @@ export function resolveProps(defaults) {
   };
 }
 
-export function parseProps(props, defaults = {}) {
-  const mergedProps = { ...defaults, ...props };
+export function parseProps(props) {
   return Object.fromEntries(
-    Object.entries(mergedProps).map(([key, val]) => {
-      const prop =
-        typeof val === "function"
-          ? val.type !== memoized &&
-            val.type !== state &&
-            val.type !== "childProp"
-            ? val
-            : val
-          : () => val;
-      return [key, prop];
+    Object.entries(props).map(([key, val]) => {
+      let res;
+      if (typeof val === "function") {
+        if (val.type === state || val.type === prop) {
+          res = val;
+        } else {
+          res = prop(val, { name: props.name });
+        }
+      } else {
+        res = () => val;
+      }
+      return [key, res];
     })
   );
 }
 
 export function equal(a, b) {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return !a.some((v) => !b.includes(v));
+  }
   const akeys = Object.keys(a);
   if (akeys.length !== Object.keys(b).length) return false;
   return !akeys.some((key) => a[key] !== b[key]);
@@ -62,4 +66,16 @@ export function getDiff(prev, next) {
   prev.forEach((it) => (next.includes(it) ? kept.push(it) : removed.push(it)));
   const added = next.filter((it) => !kept.includes(it));
   return { removed, added, kept };
+}
+
+export function debugMemo(memo) {
+  if (!memo.size) return memo.toString();
+  return [...memo.keys()].reduce(
+    (str, k, i, arr) =>
+      str +
+      `(${k?.name?.call() ?? k})->` +
+      debugMemo(memo.get(k)) +
+      (i < arr.length - 1 ? ", \n" : ""),
+    ""
+  );
 }

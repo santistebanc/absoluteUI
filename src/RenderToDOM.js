@@ -11,7 +11,7 @@ export default function RenderToDOM(base, view) {
   const tree = new Map();
   function mount(component) {
     const {
-      index,
+      name,
       classes,
       text,
       width,

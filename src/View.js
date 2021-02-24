@@ -1,5 +1,5 @@
 import { auto, Component } from "./direct";
-import { getDiff } from "./utils";
+import { getDiff, parseProps } from "./utils";
 
 export default function View(template) {
     let components = new Map();
@@ -40,7 +40,7 @@ export default function View(template) {
             const newComponent = attach(
               child,
               component,
-              template.childProps(instance.props)(child, i)
+              parseProps(template.childProps(instance.props)(child, i))
             );
   
             component.children.push(newComponent);

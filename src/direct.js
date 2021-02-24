@@ -1,6 +1,7 @@
 // what if there is a set state insie an auto?
 
-import { parseProps } from "./utils";
+import Memo from "./Memo";
+import { debugMemo, equal, parseProps } from "./utils";
 
 function init() {
   const storeMemo = new Map();
@@ -8,7 +9,7 @@ function init() {
   const memoObservers = new Map();
   let currentAuto = null;
   let context = {};
-  let trackedStates = new Set();
+  let currentMemo = {};
 
   function store(def) {
     if (typeof def === "undefined") {
@@ -17,12 +18,12 @@ function init() {
       );
     } else if (typeof def === "string") {
       //on read
-      trackedStates.add(def);
       currentAuto && currentAuto.addDependency(def);
-      return storeMemo.get(def);
+      const value = storeMemo.get(def);
+      currentMemo[def] = value;
+      return value;
     } else {
       //on write
-      console.log("............write state", def);
       const res = {};
       Object.entries(def).forEach(([key, val]) => {
         storeMemo.set(key, val);
@@ -81,20 +82,8 @@ function init() {
         });
       },
       run: () => {
-        // console.log(
-        //   "auto",
-        //   inst.dependencies.size,
-        //   inst.childAutos.length,
-        //   name
-        // );
-        // inst.clearDependencies();
-        // inst.dependencies.forEach((dep) => {
-        //   observers.get(dep).delete(inst);
-        // });
         inst.childAutos = [];
-        // inst.dependencies.clear()
-
-        //push this auto to the parent auto children list (at this point currentAuto is still the parent auto)
+        // inst.clearDependencies()
         parentAuto = currentAuto;
         if (parentAuto) parentAuto.childAutos.push(inst);
         currentAuto = inst;
@@ -107,122 +96,109 @@ function init() {
     return inst;
   }
 
-  let count = 0;
-  function memoized(prop) {
-    // console.log("memoized ", prop, count++);
-    let memo;
-    let invalidated = true;
-    const dependencies = new Set();
-    const inst = {
-      run: () => {
-        dependencies.clear();
-        invalidated = true;
-      },
-    };
-    const res = () => {
-      if (invalidated) {
-        invalidated = false;
-        const parentAuto = currentAuto;
-        currentAuto = {
-          addDependency: (dep) => {
-            dependencies.add(dep);
-            memoObservers.get(dep).add(inst);
-          },
-        };
-        memo = prop();
-        currentAuto = parentAuto;
-      }
-      dependencies.forEach((dep) => {
-        currentAuto?.addDependency(dep);
-      });
-      return memo;
-    };
-    res.type = memoized;
-    return res;
-  }
-
   function getCurrentDependencies() {
     return Array.from(currentAuto?.dependencies.values());
   }
 
-  function cached(func) {
-    let memo = {};
-    let trackedKeys = [];
-    return () => {
-      let memoLevel = memo;
-      let value;
-      for (let i = 0; i < trackedKeys.length; i++) {
-        const key = trackedKeys[i];
-        memoLevel = memoLevel[key];
-        if (!memoLevel) {
-          break;
-        } else if (memoLevel.value) {
-          value = memoLevel.value;
-          break;
-        }
-      }
-      if (value) return value;
-      trackedStates = new Set(trackedKeys);
-      const output = func();
-      trackedKeys = [...trackedStates.keys()];
+  function cached(func, { limit } = {}) {
+    let last;
+    let force = false;
+    const memo = Memo({ limit });
 
-      let level = 0;
-      populateTable(memo, trackedKeys);
+    const res = (...args) => {
+      //if there are no dependencies output the last value
+      if (args.length === 0 && typeof last !== "undefined" && !force)
+        return last;
 
-      function populateTable(table, keys) {
-        console.log("........", table, keys, level, trackedKeys.length);
-        level++;
-        keys.forEach((key) => {
-          if (level === trackedKeys.length) {
-            table[key] = { ...table[key], value: store(key) };
-          }
-          let newKeys = [...keys];
-          newKeys.splice(newKeys.indexOf(key), 1);
+      // return cached value if it exists
+      let cachedValue = memo.get(args);
+      if (typeof cachedValue !== "undefined" && !force) return cachedValue;
 
-          table[key] = { ...table[key] };
-          populateTable(table[key], newKeys);
-        });
-      }
+      //if the cache does not exist run the function and cache output
+      const output = func(...args);
+      last = output;
 
+      memo.set(args, output);
+      force = false;
       return output;
     };
+    res.forceRun = (...args) => {
+      force = true;
+      return res(...args);
+    };
+    res.type = cached;
+    return res;
   }
 
   function Component(template, passedProps = {}) {
-    // const parsedPassedProps = Object.values(passedProps).forEach((prop) => {
-    //   if (typeof prop === "function") prop.type = "childProp";
-    // });
-    const props = parseProps({
+    const props = {
       ...template.defaultProps,
-      ...passedProps,
+      ...parseProps(passedProps),
       ...context,
       ...template.ownProps,
-    });
-    const overridableOutput = Object.fromEntries(
+    };
+
+    const bindedOutput = Object.fromEntries(
       Object.entries(template.output).map(([key, val]) => [
         key,
-        (unparsedOverrideProps) => {
-          const overrideProps = parseProps({
-            ...props,
-            ...unparsedOverrideProps,
-          });
-          return val(overrideProps);
-        },
+        prop(val).bind(null, props),
       ])
     );
+    let output = bindedOutput;
     return {
-      ...overridableOutput,
+      ...output,
       props,
       template,
     };
   }
 
+  function prop(func, { limit = 10, name } = {}) {
+    let last;
+    const deps = [];
+    const memo = Memo({ limit });
+    
+    const res = (...args) => {
+      //if there are no dependencies output the last value
+      if (deps.length === 0 && typeof last !== "undefined") return last;
+      
+      //search in memo if there is a cached value for the current state
+      if (deps.length > 0) {
+        const keys = deps.map((dep) => {
+          //pass dependencies to auto
+          currentAuto && currentAuto.addDependency(dep);
+          //map store values
+          return store(dep);
+        });
+        const cachedValue = memo.get(keys);
+        if (typeof cachedValue !== "undefined") return cachedValue;
+      }
+      
+      const parentMemo = { ...currentMemo };
+      currentMemo = {};
+      const output = func(...args);
+      
+      Object.keys(currentMemo).forEach((k) => {
+        if (!deps.includes(k)) deps.push(k);
+      });
+      
+      if (deps.length) {
+        const keys = deps.map((dep) => currentMemo[dep]);
+        memo.set(keys, output);
+      }
+      currentMemo = { ...parentMemo, ...currentMemo };
+      last = output;
+      return output;
+    };
+    res.type = prop;
+    return res;
+  }
+  
   function Context(props, child) {
     const setContext = () => {
       context = parseProps(
         typeof props === "function" ? props(context) : { ...context, ...props }
-      );
-    };
+        );
+      };
     if (child) {
       setContext();
       return child;
@@ -238,11 +214,11 @@ function init() {
     store,
     auto,
     state,
-    memoized,
     getCurrentDependencies,
     Component,
     Context,
     cached,
+    prop,
   };
 }
 
@@ -253,8 +229,8 @@ export default direct;
 export const store = direct.store;
 export const auto = direct.auto;
 export const state = direct.state;
-export const memoized = direct.memoized;
 export const getCurrentDependencies = direct.getCurrentDependencies;
 export const Context = direct.Context;
 export const Component = direct.Component;
 export const cached = direct.cached;
+export const prop = direct.prop;
